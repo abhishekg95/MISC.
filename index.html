@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XML Message Formatter</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f6fa;--panel:#fff;--text:#172033;--muted:#667085;--border:#d8deea;--accent:#2457d6;--soft:#eaf0ff;--good:#087443;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#111827;--panel:#1b2433;--text:#e8edf6;--muted:#aab5c5;--border:#374151;--accent:#8eacff;--soft:#263454;--good:#6ee7a8;--bad:#ff938b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 18px 48px}.head{display:flex;gap:14px;align-items:center;margin-bottom:8px}.logo{width:48px;height:48px;border-radius:13px;background:var(--soft);display:grid;place-items:center;font-size:25px}.head h1{font-size:clamp(24px,4vw,32px);line-height:1.2;margin:0}.sub{color:var(--muted);margin:8px 0 22px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px;min-width:0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.panelhead h2{font-size:16px;margin:0}textarea,pre{width:100%;min-height:340px;margin:0;padding:13px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2;white-space:pre;overflow:auto}textarea{resize:vertical;min-height:340px}pre{overflow:auto;white-space:pre;overflow-wrap:normal}
+button{border:1px solid var(--border);background:var(--panel);color:var(--text);padding:9px 13px;border-radius:9px;font-weight:600;cursor:pointer}button.primary{background:var(--accent);color:white;border-color:transparent}button:hover{filter:brightness(.96)}button:focus-visible,textarea:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #83a4ff;outline-offset:2px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.options{display:flex;flex-wrap:wrap;gap:14px;margin-top:13px;color:var(--muted);font-size:13px}.options label{display:flex;align-items:center;gap:7px}.options input{accent-color:var(--accent)}.status{font-size:13px;min-height:22px;margin-top:9px;color:var(--muted)}.status.good{color:var(--good)}.status.bad{color:var(--bad)}.note{margin-top:18px;padding:13px 15px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:13px}.small{font-size:12px;color:var(--muted)}.rightactions{display:flex;gap:7px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.panel textarea,.panel pre{min-height:250px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="head"><div class="logo" aria-hidden="true">⌘</div><div><h1>XML Message Formatter</h1><div class="small">A local tool for formatting copied XML</div></div></div>
+  <p class="sub">Paste the message from your website, format it, then copy the readable XML into Sublime Text or Notepad++.</p>
+  <div class="grid">
+    <section class="panel">
+      <div class="panelhead"><h2>Input XML</h2><button id="pasteBtn" type="button">Paste from clipboard</button></div>
+      <textarea id="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Paste XML here..."></textarea>
+      <div class="options">
+        <label><input type="checkbox" id="restoreEscaped"> Convert literal \r\n and \n markers to line breaks</label>
+        <label><input type="checkbox" id="removeBom" checked> Remove leading BOM</label>
+      </div>
+      <div class="actions">
+        <button class="primary" id="formatBtn" type="button">Format XML</button>
+        <button id="clearBtn" type="button">Clear</button>
+        <button id="exampleBtn" type="button">Load example</button>
+      </div>
+      <div class="status" id="inputStatus" role="status">Your text stays in this browser tab; nothing is uploaded.</div>
+    </section>
+    <section class="panel">
+      <div class="panelhead"><h2>Formatted output</h2><div class="rightactions"><button id="copyBtn" type="button">Copy output</button><button id="downloadBtn" type="button">Save .xml</button></div></div>
+      <pre id="output" aria-label="Formatted XML output"></pre>
+      <div class="status" id="outputStatus" role="status">Formatted output will appear here.</div>
+    </section>
+  </div>
+  <div class="note"><strong>Important:</strong> Formatting restores indentation between XML elements. If the website has deleted line breaks inside a text value, those original breaks cannot be recovered automatically unless the message contains recognizable markers or you provide message-specific rules. This tool rejects malformed XML rather than guessing and changing its meaning.</div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const input = $('input'), output = $('output');
+  const setStatus = (id, text, kind='') => { const el=$(id); el.textContent=text; el.className='status '+kind; };
+
+  function escapeText(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function escapeAttr(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;').replace(/\r/g,'&#13;').replace(/\n/g,'&#10;').replace(/\t/g,'&#9;');
+  }
+  function serializeNode(node, depth, indent, newline) {
+    const pad = indent.repeat(depth);
+    switch(node.nodeType) {
+      case Node.ELEMENT_NODE: {
+        const tag = node.tagName;
+        let attrs = '';
+        for (const a of Array.from(node.attributes)) attrs += ` ${a.name}="${escapeAttr(a.value)}"`;
+        const children = Array.from(node.childNodes);
+        if (!children.length) return `${pad}<${tag}${attrs}/>`;
+        const hasSignificantText = children.some(n => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() !== '');
+        // Mixed content must stay inline: adding whitespace could change the actual value.
+        if (hasSignificantText) {
+          return `${pad}<${tag}${attrs}>` + children.map(n => serializeInline(n)).join('') + `</${tag}>`;
+        }
+        const useful = children.filter(n => !(n.nodeType === Node.TEXT_NODE && n.nodeValue.trim() === ''));
+        if (!useful.length) return `${pad}<${tag}${attrs}></${tag}>`;
+        return `${pad}<${tag}${attrs}>` + newline +
+          useful.map(n => serializeNode(n, depth+1, indent, newline)).join(newline) +
+          newline + `${pad}</${tag}>`;
+      }
+      case Node.COMMENT_NODE: return `${pad}<!--${node.nodeValue}-->`;
+      case Node.PROCESSING_INSTRUCTION_NODE: return `${pad}<?${node.target}${node.data ? ' '+node.data : ''}?>`;
+      case Node.CDATA_SECTION_NODE: return `${pad}<![CDATA[${node.nodeValue}]]>`;
+      case Node.TEXT_NODE: return `${pad}${escapeText(node.nodeValue)}`;
+      default: return `${pad}${new XMLSerializer().serializeToString(node)}`;
+    }
+  }
+  function serializeInline(node) {
+    switch(node.nodeType) {
+      case Node.ELEMENT_NODE: {
+        let attrs='';
+        for (const a of Array.from(node.attributes)) attrs += ` ${a.name}="${escapeAttr(a.value)}"`;
+        const children=Array.from(node.childNodes);
+        if (!children.length) return `<${node.tagName}${attrs}/>`;
+        return `<${node.tagName}${attrs}>${children.map(serializeInline).join('')}</${node.tagName}>`;
+      }
+      case Node.TEXT_NODE: return escapeText(node.nodeValue);
+      case Node.CDATA_SECTION_NODE: return `<![CDATA[${node.nodeValue}]]>`;
+      case Node.COMMENT_NODE: return `<!--${node.nodeValue}-->`;
+      case Node.PROCESSING_INSTRUCTION_NODE: return `<?${node.target}${node.data ? ' '+node.data : ''}?>`;
+      default: return new XMLSerializer().serializeToString(node);
+    }
+  }
+  function formatXML(raw) {
+    let text=raw;
+    if ($('removeBom').checked) text=text.replace(/^\uFEFF/, '');
+    if ($('restoreEscaped').checked) {
+      // Only explicit, literal escape sequences are changed; ordinary text is left alone.
+      text=text.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+    }
+    text=text.trim();
+    if (!text) throw new Error('Please paste XML into the input box first.');
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const err=doc.getElementsByTagName('parsererror')[0];
+    if (err) throw new Error('XML is not well-formed: ' + err.textContent.replace(/\s+/g,' ').trim());
+    const root=doc.documentElement;
+    if (!root) throw new Error('No XML root element was found.');
+    const newline='\r\n', indent='  ';
+    const declaration = /^\s*(<\?xml\b[^?]*\?>)/i.exec(text);
+    const pieces=[];
+    if (declaration) pieces.push(declaration[1]);
+    // Keep document-level comments and processing instructions around the root where possible.
+    for (const n of Array.from(doc.childNodes)) {
+      if (n === root) pieces.push(serializeNode(n,0,indent,newline));
+      else if (n.nodeType === Node.COMMENT_NODE) pieces.push(`<!--${n.nodeValue}-->`);
+      else if (n.nodeType === Node.PROCESSING_INSTRUCTION_NODE && n.target.toLowerCase() !== 'xml') pieces.push(`<?${n.target}${n.data ? ' '+n.data : ''}?>`);
+    }
+    return pieces.join(newline) + newline;
+  }
+
+  async function formatAndAutoCopy() {
+    try {
+      const result = formatXML(input.value);
+      output.textContent = result;
+      setStatus('inputStatus', 'XML parsed successfully.', 'good');
+      try {
+        await navigator.clipboard.writeText(result);
+        setStatus('outputStatus', 'Formatted automatically and copied to clipboard.', 'good');
+      } catch (e) {
+        // Clipboard write may be blocked by browser permissions, especially for local files.
+        setStatus('outputStatus', 'XML formatted. Browser blocked automatic clipboard copying; click Copy output.', 'bad');
+      }
+    } catch(e) {
+      output.textContent = '';
+      setStatus('outputStatus', e.message, 'bad');
+      setStatus('inputStatus', 'Formatting failed; input has not been changed.', 'bad');
+    }
+  }
+
+  $('formatBtn').addEventListener('click', formatAndAutoCopy);
+
+  // Process ordinary Ctrl+V / right-click paste after the browser inserts clipboard text.
+  input.addEventListener('paste', () => {
+    setTimeout(() => { formatAndAutoCopy(); }, 0);
+  });
+  $('copyBtn').addEventListener('click', async () => {
+    const text=output.textContent;
+    if (!text) { setStatus('outputStatus','There is no formatted output to copy.','bad'); return; }
+    try { await navigator.clipboard.writeText(text); setStatus('outputStatus','Formatted XML copied to clipboard.','good'); }
+    catch(e) {
+      const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+      const ok=document.execCommand('copy'); ta.remove();
+      setStatus('outputStatus',ok?'Formatted XML copied to clipboard.':'Clipboard access was blocked. Select the output and copy it manually.',ok?'good':'bad');
+    }
+  });
+  $('pasteBtn').addEventListener('click', async () => {
+    try {
+      input.value = await navigator.clipboard.readText();
+      setStatus('inputStatus', 'Clipboard text pasted. Formatting now…', 'good');
+      await formatAndAutoCopy();
+    } catch(e) {
+      setStatus('inputStatus', 'Browser blocked clipboard access. Click the input box and press Ctrl+V instead.', 'bad');
+      input.focus();
+    }
+  });
+  $('clearBtn').addEventListener('click', () => { input.value=''; output.textContent=''; setStatus('inputStatus','Input cleared.'); setStatus('outputStatus','Formatted output will appear here.'); input.focus(); });
+  $('exampleBtn').addEventListener('click', () => {
+    input.value='<?xml version="1.0" encoding="UTF-8"?><message><header><sender>ABC</sender><receiver>XYZ</receiver></header><body><amount>100</amount><currency>INR</currency></body></message>';
+    setStatus('inputStatus','Example loaded. Click Format XML to try it.');
+  });
+  $('downloadBtn').addEventListener('click', () => {
+    if (!output.textContent) { setStatus('outputStatus','Format some XML before saving.','bad'); return; }
+    const blob=new Blob([output.textContent],{type:'application/xml;charset=utf-8'});
+    const url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download='formatted.xml'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    setStatus('outputStatus','Download started: formatted.xml','good');
+  });
+})();
+</script>
+</body>
+</html>
